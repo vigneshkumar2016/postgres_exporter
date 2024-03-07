@@ -71,50 +71,49 @@ var (
 		prometheus.Labels{},
 	)
 
-	pgStatStatementsQuery = `SELECT
-		pg_get_userbyid(userid) as user,
-		pg_database.datname,
-		pg_stat_statements.queryid,
-		pg_stat_statements.calls as calls_total,
-		pg_stat_statements.total_time / 1000.0 as seconds_total,
-		pg_stat_statements.rows as rows_total,
-		pg_stat_statements.blk_read_time / 1000.0 as block_read_seconds_total,
-		pg_stat_statements.blk_write_time / 1000.0 as block_write_seconds_total
-		FROM pg_stat_statements
-	JOIN pg_database
-		ON pg_database.oid = pg_stat_statements.dbid
-	WHERE
-		total_time > (
-		SELECT percentile_cont(0.1)
-			WITHIN GROUP (ORDER BY total_time)
-			FROM pg_stat_statements
+	// Query is compatible for versions lesser than PostgreSQL 13.
+	pgStatStatementsQuery = `WITH percentiles AS (
+    			SELECT percentile_cont(0.1) WITHIN GROUP (ORDER BY total_time) AS percentile
+    			FROM pg_stat_statements
 		)
-	ORDER BY seconds_total DESC
-	LIMIT 100;`
+		SELECT DISTINCT ON (pss.queryid)
+    		pg_get_userbyid(pss.userid) as user,
+    		pg_database.datname,
+    		pss.queryid,
+    		pss.calls as calls_total,
+    		pss.total_time / 1000.0 as seconds_total,
+    		pss.rows as rows_total,
+    		pss.blk_read_time / 1000.0 as block_read_seconds_total,
+    		pss.blk_write_time / 1000.0 as block_write_seconds_total
+		FROM pg_stat_statements pss
+		JOIN pg_database ON pg_database.oid = pss.dbid
+		CROSS JOIN percentiles
+		WHERE pss.total_time > (SELECT percentile FROM percentiles)
+		ORDER BY pss.queryid, pss.userid DESC
+		LIMIT 100;`
 
-	pgStatStatementsNewQuery = `SELECT
-		pg_get_userbyid(userid) as user,
-		pg_database.datname,
-		pg_stat_statements.queryid,
-		pg_stat_statements.calls as calls_total,
-		pg_stat_statements.total_exec_time / 1000.0 as seconds_total,
-		pg_stat_statements.rows as rows_total,
-		pg_stat_statements.blk_read_time / 1000.0 as block_read_seconds_total,
-		pg_stat_statements.blk_write_time / 1000.0 as block_write_seconds_total
-		FROM pg_stat_statements
-	JOIN pg_database
-		ON pg_database.oid = pg_stat_statements.dbid
-	WHERE
-		total_exec_time > (
-		SELECT percentile_cont(0.1)
-			WITHIN GROUP (ORDER BY total_exec_time)
-			FROM pg_stat_statements
-		)
-	ORDER BY seconds_total DESC
-	LIMIT 100;`
+	// Query is compatible from PostgreSQL 13 and higher versions.
+	pgStatStatementsNewQuery = `SELECT DISTINCT ON (pss.queryid)
+    		pg_get_userbyid(pss.userid) as user,
+    		pg_database.datname,
+    		pss.queryid,
+    		pss.calls as calls_total,
+    		pss.total_exec_time / 1000.0 as seconds_total,
+    		pss.rows as rows_total,
+    		pss.blk_read_time / 1000.0 as block_read_seconds_total,
+    		pss.blk_write_time / 1000.0 as block_write_seconds_total
+		FROM pg_stat_statements pss
+		JOIN pg_database ON pg_database.oid = pss.dbid
+		JOIN (
+    			SELECT percentile_cont(0.1) WITHIN GROUP (ORDER BY total_exec_time) AS percentile_val
+    			FROM pg_stat_statements
+		) AS perc ON pss.total_exec_time > perc.percentile_val
+		ORDER BY pss.queryid, pss.userid DESC
+		LIMIT 100;`
 )
 
 func (PGStatStatementsCollector) Update(ctx context.Context, instance *instance, ch chan<- prometheus.Metric) error {
+	// Set query based on the version parsed.
 	query := pgStatStatementsQuery
 	if instance.version.GE(semver.MustParse("13.0.0")) {
 		query = pgStatStatementsNewQuery
