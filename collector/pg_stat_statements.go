@@ -76,7 +76,7 @@ var (
     			SELECT percentile_cont(0.1) WITHIN GROUP (ORDER BY total_time) AS percentile
     			FROM pg_stat_statements
 		)
-		SELECT DISTINCT ON (pss.queryid)
+		SELECT DISTINCT ON (pss.queryid, pg_get_userbyid(pss.userid), pg_database.datname)
     		pg_get_userbyid(pss.userid) as user,
     		pg_database.datname,
     		pss.queryid,
@@ -87,28 +87,28 @@ var (
     		pss.blk_write_time / 1000.0 as block_write_seconds_total
 		FROM pg_stat_statements pss
 		JOIN pg_database ON pg_database.oid = pss.dbid
-		CROSS JOIN percentiles
+			CROSS JOIN percentiles
 		WHERE pss.total_time > (SELECT percentile FROM percentiles)
-		ORDER BY pss.queryid, pss.userid DESC
+		ORDER BY pss.queryid, pg_get_userbyid(pss.userid) DESC, pg_database.datname
 		LIMIT 100;`
 
 	// Query is compatible from PostgreSQL 13 and higher versions.
-	pgStatStatementsNewQuery = `SELECT DISTINCT ON (pss.queryid)
-    		pg_get_userbyid(pss.userid) as user,
-    		pg_database.datname,
+	pgStatStatementsNewQuery = `SELECT DISTINCT ON (pss.queryid, pg_get_userbyid(pss.userid), pg_database.datname)
+    		pg_get_userbyid(pss.userid) AS user,
+    		pg_database.datname AS database_name,
     		pss.queryid,
-    		pss.calls as calls_total,
-    		pss.total_exec_time / 1000.0 as seconds_total,
-    		pss.rows as rows_total,
-    		pss.blk_read_time / 1000.0 as block_read_seconds_total,
-    		pss.blk_write_time / 1000.0 as block_write_seconds_total
+    		pss.calls AS calls_total,
+    		pss.total_exec_time / 1000.0 AS seconds_total,
+    		pss.rows AS rows_total,
+    		pss.blk_read_time / 1000.0 AS block_read_seconds_total,
+    		pss.blk_write_time / 1000.0 AS block_write_seconds_total
 		FROM pg_stat_statements pss
 		JOIN pg_database ON pg_database.oid = pss.dbid
 		JOIN (
     			SELECT percentile_cont(0.1) WITHIN GROUP (ORDER BY total_exec_time) AS percentile_val
     			FROM pg_stat_statements
 		) AS perc ON pss.total_exec_time > perc.percentile_val
-		ORDER BY pss.queryid, pss.userid DESC
+		ORDER BY pss.queryid, pg_get_userbyid(pss.userid) DESC, pg_database.datname
 		LIMIT 100;`
 )
 
